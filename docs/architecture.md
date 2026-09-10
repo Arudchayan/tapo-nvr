@@ -15,7 +15,11 @@ NVR host: Frigate -> ~/tapo-nvr/frigate/storage (/media/frigate)
 ```
 
 The relay is a transparent TCP proxy. It does not parse RTSP, does not store
-streams, and terminates a connection as soon as either side closes.
+streams, and half-closes the opposite direction when one side ends, so the
+remaining direction can finish cleanly.
+
+A deployment manages exactly one camera. Multiple cameras are out of scope for
+now; run one relay per camera (each on its own port) if needed.
 
 ## Components
 

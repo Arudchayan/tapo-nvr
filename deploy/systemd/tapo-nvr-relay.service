@@ -3,17 +3,23 @@ Description=tapo-nvr camera-only RTSP relay
 Documentation=https://github.com/Arudchayan/tapo-nvr
 Wants=network-online.target tailscaled.service
 After=network-online.target tailscaled.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
+# The interpreter must be able to import tapo_nvr. Point PYTHON at a venv or a
+# system-wide install in /etc/tapo-nvr/relay.env, for example:
+#   PYTHON=/opt/tapo-nvr/venv/bin/python3
+Environment=PYTHON=/usr/bin/python3
 Environment=RELAY_HOST=auto
 Environment=RELAY_PORT=8554
 Environment=RELAY_ALLOWED_CIDR=100.64.0.0/10
 Environment=CAMERA_RTSP_PORT=554
 EnvironmentFile=-/etc/tapo-nvr/relay.env
-ExecStart=/usr/bin/python3 -m tapo_nvr.relay --bind ${RELAY_HOST} --listen-port ${RELAY_PORT} --target ${CAMERA_HOST} --target-port ${CAMERA_RTSP_PORT} --allowed-cidr ${RELAY_ALLOWED_CIDR}
+ExecStart=${PYTHON} -m tapo_nvr.relay --bind ${RELAY_HOST} --listen-port ${RELAY_PORT} --target ${CAMERA_HOST} --target-port ${CAMERA_RTSP_PORT} --allowed-cidr ${RELAY_ALLOWED_CIDR}
 Restart=on-failure
-RestartSec=5
+RestartSec=10
 
 # Hardening
 DynamicUser=yes

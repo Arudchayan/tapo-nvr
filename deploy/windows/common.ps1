@@ -13,11 +13,14 @@ function Read-DotEnv {
 
     $config = @{}
     $lineNumber = 0
-    foreach ($rawLine in Get-Content -LiteralPath $Path) {
+    foreach ($rawLine in Get-Content -LiteralPath $Path -Encoding UTF8) {
         $lineNumber++
         $line = $rawLine.Trim()
         if (-not $line -or $line.StartsWith('#')) {
             continue
+        }
+        if ($line.StartsWith('export ')) {
+            $line = $line.Substring(7).Trim()
         }
         $separator = $line.IndexOf('=')
         if ($separator -lt 1) {
@@ -59,6 +62,35 @@ function Get-DotEnvValue {
     return $DefaultValue
 }
 
+function Test-HostValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $parsed = $null
+    if ([System.Net.IPAddress]::TryParse($Value, [ref]$parsed)) {
+        return $true
+    }
+    return $Value -match '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+}
+
+function Assert-SafeHostValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    if (-not (Test-HostValue -Value $Value)) {
+        throw "$Name contains invalid characters: '$Value'. Use an IP address or host name."
+    }
+}
+
 function Resolve-PythonPath {
     [CmdletBinding()]
     param(
@@ -68,6 +100,9 @@ function Resolve-PythonPath {
 
     $candidate = Get-DotEnvValue -Config $Config -Name 'PYTHON_PATH'
     if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+        if ((Split-Path -Leaf $candidate) -notlike 'python*.exe') {
+            throw "PYTHON_PATH must point to a python.exe, got: $candidate"
+        }
         return $candidate
     }
     $command = Get-Command python.exe -ErrorAction SilentlyContinue
@@ -99,11 +134,19 @@ function Get-RelaySettings {
     if (-not $cameraHost) {
         throw 'CAMERA_HOST is required in .env.'
     }
+    Assert-SafeHostValue -Name 'CAMERA_HOST' -Value $cameraHost
     $cameraPort = [int](Get-DotEnvValue -Config $Config -Name 'CAMERA_RTSP_PORT' -DefaultValue '554')
 
-    $relayHost = Get-DotEnvValue -Config $Config -Name 'RELAY_HOST'
-    if (-not $relayHost -or $relayHost -eq 'auto') {
+    $bindValue = Get-DotEnvValue -Config $Config -Name 'RELAY_HOST'
+    if (-not $bindValue) {
+        $bindValue = 'auto'
+    }
+    if ($bindValue -eq 'auto') {
         $relayHost = Resolve-TailscaleIp
+    }
+    else {
+        Assert-SafeHostValue -Name 'RELAY_HOST' -Value $bindValue
+        $relayHost = $bindValue
     }
     $relayPort = [int](Get-DotEnvValue -Config $Config -Name 'RELAY_PORT' -DefaultValue '8554')
 
@@ -118,6 +161,7 @@ function Get-RelaySettings {
         CameraHost = $cameraHost
         CameraPort = $cameraPort
         RelayHost  = $relayHost
+        Bind       = $bindValue
         RelayPort  = $relayPort
         Allowed    = $allowedCidrs
     }

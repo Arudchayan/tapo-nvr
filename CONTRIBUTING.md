@@ -35,8 +35,8 @@ ruff format --check .
 pytest
 ```
 
-Use `ruff format .` to apply formatting automatically. CI runs the same checks
-on Linux and Windows.
+Use `ruff format .` to apply formatting automatically. CI runs lint on Linux
+and the test matrix on Linux and Windows, for Python 3.10 through 3.13.
 
 ## Commit style
 

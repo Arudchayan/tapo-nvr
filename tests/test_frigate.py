@@ -26,6 +26,15 @@ def test_render_config_without_hardware_acceleration(settings: Settings) -> None
     assert "detectors:" in config
 
 
+def test_render_config_uses_frigate_record_schema(settings: Settings) -> None:
+    config = render_config(settings, "none")
+
+    assert "  continuous:\n    days: 0" in config
+    assert "  motion:\n    days: 3" in config
+    assert "  alerts:\n    retain:\n      days: 30" in config
+    assert "  detections:\n    retain:\n      days: 30" in config
+
+
 def test_render_config_lists_tracked_objects() -> None:
     settings = Settings(camera_objects=("person", "dog"))
     config = render_config(settings, "none")

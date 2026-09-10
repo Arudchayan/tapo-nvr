@@ -25,6 +25,7 @@ def render_config(settings: Settings, gpu: str) -> str:
         "  cpu:",
         "    type: cpu",
         "",
+        # Schema reference: https://docs.frigate.video/configuration/record/
         "record:",
         "  enabled: true",
         "  continuous:",

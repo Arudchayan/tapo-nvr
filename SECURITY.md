@@ -36,7 +36,25 @@ fix and release before public disclosure.
 
 ## Hardening recommendations
 
-- Restrict the relay port to the NVR host with Tailscale ACLs.
+- Restrict the relay port to the NVR host with Tailscale ACLs. For example:
+
+  ```json
+  {
+    "tagOwners": {
+      "tag:relay": ["autogroup:admin"],
+      "tag:nvr": ["autogroup:admin"]
+    },
+    "acls": [
+      { "action": "accept", "src": ["tag:nvr"], "dst": ["tag:relay:8554"] }
+    ]
+  }
+  ```
+
+  This allows only the NVR host to reach the relay port, even if other devices
+  are on the tailnet.
 - Use SSH keys instead of passwords (`NVR_SSH_KEY`).
 - Pin `FRIGATE_IMAGE` to a specific version and update deliberately.
+- Keep `.env` readable only by your user (`chmod 600 .env` on POSIX).
 - Rotate the camera account password if it has ever been committed or shared.
+- The relay is IPv4-only and, on Windows, binds with `SO_EXCLUSIVEADDRUSE` so
+  another local process cannot silently share the port.

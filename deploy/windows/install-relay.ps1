@@ -32,6 +32,7 @@ $config = Read-DotEnv -Path $EnvFile
 $python = Resolve-PythonPath -Config $config
 Assert-TapoNvrInstalled -PythonPath $python
 $relay = Get-RelaySettings -Config $config
+Write-Host "Using Python: $python"
 
 $logDirectory = Join-Path $env:ProgramData 'tapo-nvr'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -42,10 +43,17 @@ Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue | Remov
 New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP `
     -LocalPort $relay.RelayPort -RemoteAddress $relay.Allowed -Profile Any | Out-Null
 
-$arguments = '-m tapo_nvr.relay --bind {0} --listen-port {1} --target {2} --target-port {3} --allowed-cidr {4} --log-file "{5}"' -f `
-    $relay.RelayHost, $relay.RelayPort, $relay.CameraHost, $relay.CameraPort, ($relay.Allowed -join ','), $logFile
+$startupShortcut = Join-Path ([Environment]::GetFolderPath('Startup')) 'tapo-nvr relay.lnk'
+if (Test-Path -LiteralPath $startupShortcut) {
+    Write-Warning "A Startup shortcut already exists at $startupShortcut; remove it to avoid two relay instances."
+}
 
-$action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $repoRoot
+$arguments = '-m tapo_nvr.relay --bind {0} --listen-port {1} --target {2} --target-port {3} --allowed-cidr {4} --log-file "{5}"' -f `
+    $relay.Bind, $relay.RelayPort, $relay.CameraHost, $relay.CameraPort, ($relay.Allowed -join ','), $logFile
+
+# The working directory must not be user-writable: Python adds it to sys.path
+# for -m, so a shared checkout could shadow the installed package.
+$action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $logDirectory
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
 $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `

@@ -10,17 +10,22 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from .config import DEFAULT_ALLOWED_CIDR, ConfigError, Network, parse_networks
+from .config import DEFAULT_ALLOWED_CIDR, ConfigError, Network, load_env_file, parse_networks
 
 LOGGER = logging.getLogger("tapo_nvr.relay")
 BUFFER_SIZE = 64 * 1024
 RETRY_DELAY_SECONDS = 5
+DEFAULT_MAX_CONNECTIONS = 32
+LOG_FILE_MAX_BYTES = 5 * 1024 * 1024
+LOG_FILE_BACKUPS = 3
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,7 @@ class RelayConfig:
         default_factory=lambda: parse_networks([DEFAULT_ALLOWED_CIDR])
     )
     connect_timeout: float = 10.0
+    max_connections: int = DEFAULT_MAX_CONNECTIONS
 
 
 def tailscale_ipv4() -> str:
@@ -44,7 +50,16 @@ def tailscale_ipv4() -> str:
         raise ConfigError(
             "The 'tailscale' executable was not found on PATH; set RELAY_HOST explicitly."
         )
-    result = subprocess.run([executable, "ip", "-4"], capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(
+            [executable, "ip", "-4"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConfigError("'tailscale ip -4' did not respond within 10 seconds.") from exc
     for line in result.stdout.splitlines():
         address = line.strip()
         if address:
@@ -107,6 +122,9 @@ def handle_client(client: socket.socket, peer: str, config: RelayConfig) -> None
 
     LOGGER.info("Relaying %s -> %s:%s", peer, config.target, config.target_port)
     client.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    upstream.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    # The connect timeout must not become a read timeout on the streaming socket.
+    upstream.settimeout(None)
     with client, upstream:
         left = threading.Thread(target=pump, args=(client, upstream), daemon=True)
         right = threading.Thread(target=pump, args=(upstream, client), daemon=True)
@@ -124,6 +142,7 @@ class RelayServer:
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stopped = threading.Event()
+        self._slots = threading.BoundedSemaphore(max(1, config.max_connections))
 
     @property
     def port(self) -> int:
@@ -132,10 +151,19 @@ class RelayServer:
             raise RuntimeError("The relay has not been started.")
         return int(self._listener.getsockname()[1])
 
+    @property
+    def alive(self) -> bool:
+        """Whether the accept loop is still running."""
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
         """Bind the listen socket and start accepting connections."""
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        family = socket.AF_INET6 if ":" in self._config.bind else socket.AF_INET
+        listener = socket.socket(family, socket.SOCK_STREAM)
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind((self._config.bind, self._config.listen_port))
         listener.listen()
         listener.settimeout(0.5)
@@ -143,6 +171,12 @@ class RelayServer:
         self._thread = threading.Thread(target=self._accept_loop, daemon=True, name="relay-accept")
         self._thread.start()
         LOGGER.info("Relay listening on %s:%s", self._config.bind, self.port)
+
+    def _handle_slot(self, client: socket.socket, peer: str) -> None:
+        try:
+            handle_client(client, peer, self._config)
+        finally:
+            self._slots.release()
 
     def _accept_loop(self) -> None:
         listener = self._listener
@@ -153,13 +187,34 @@ class RelayServer:
                 client, address = listener.accept()
             except TimeoutError:
                 continue
-            except OSError:
-                break
-            threading.Thread(
-                target=handle_client,
-                args=(client, address[0], self._config),
-                daemon=True,
-            ).start()
+            except OSError as exc:
+                if self._stopped.is_set():
+                    break
+                LOGGER.warning("Accept failed (%s); continuing.", exc)
+                time.sleep(0.1)
+                continue
+            if not self._slots.acquire(blocking=False):
+                LOGGER.warning(
+                    "Connection limit of %s reached; rejecting %s.",
+                    self._config.max_connections,
+                    address[0],
+                )
+                client.close()
+                continue
+            try:
+                threading.Thread(
+                    target=self._handle_slot,
+                    args=(client, address[0]),
+                    daemon=True,
+                ).start()
+            except RuntimeError:
+                self._slots.release()
+                client.close()
+                LOGGER.error(
+                    "Could not start a worker thread; closing connection from %s.",
+                    address[0],
+                )
+                time.sleep(0.1)
 
     def stop(self) -> None:
         """Stop accepting connections and wait for the accept loop to end."""
@@ -177,7 +232,14 @@ def _configure_logging(log_file: str | None, level: str) -> None:
     if log_file:
         path = Path(log_file)
         path.parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(path, encoding="utf-8"))
+        handlers.append(
+            RotatingFileHandler(
+                path,
+                maxBytes=LOG_FILE_MAX_BYTES,
+                backupCount=LOG_FILE_BACKUPS,
+                encoding="utf-8",
+            )
+        )
     logging.basicConfig(
         level=getattr(logging, level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -186,24 +248,43 @@ def _configure_logging(log_file: str | None, level: str) -> None:
     )
 
 
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a port number") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be between 1 and 65535, got {port}")
+    return port
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the argument parser for the relay command."""
     parser = argparse.ArgumentParser(
         prog="tapo-nvr relay",
-        description="Relay one RTSP camera over a private TCP port.",
+        description=(
+            "Relay one RTSP camera over a private TCP port. Values not given on "
+            "the command line are read from the environment file."
+        ),
+    )
+    parser.add_argument(
+        "--env",
+        type=Path,
+        default=None,
+        help="Environment file to read defaults from (default: ./.env when present).",
     )
     parser.add_argument(
         "--bind",
-        default="auto",
+        default=None,
         help="Local address to listen on, or 'auto' for the Tailscale IPv4 address.",
     )
-    parser.add_argument("--listen-port", type=int, default=8554)
-    parser.add_argument("--target", required=True, help="Camera host name or IP address.")
-    parser.add_argument("--target-port", type=int, default=554)
+    parser.add_argument("--listen-port", type=_port, default=None)
+    parser.add_argument("--target", default=None, help="Camera host name or IP address.")
+    parser.add_argument("--target-port", type=_port, default=None)
     parser.add_argument(
         "--allowed-cidr",
         action="append",
-        default=[],
+        default=None,
         metavar="CIDR",
         help=(
             "Client ranges allowed to connect; repeat or comma-separate. "
@@ -211,28 +292,71 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-connections",
+        type=int,
+        default=DEFAULT_MAX_CONNECTIONS,
+        metavar="N",
+        help=f"Maximum simultaneous connections (default: {DEFAULT_MAX_CONNECTIONS}).",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
-    parser.add_argument("--log-file", help="Also write logs to this file.")
+    parser.add_argument("--log-file", help="Also write rotating logs to this file.")
     return parser
+
+
+def _pick(cli_value: object, env_values: dict[str, str], key: str, default: object) -> object:
+    if cli_value is not None:
+        return cli_value
+    value = env_values.get(key)
+    return value if value else default
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the relay until interrupted."""
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     _configure_logging(args.log_file, args.log_level)
-    networks = parse_networks(args.allowed_cidr)
+
+    env_values: dict[str, str] = {}
+    default_env = Path(".env")
+    try:
+        if args.env is not None:
+            env_values = load_env_file(args.env)
+        elif default_env.is_file():
+            env_values = load_env_file(default_env)
+    except ConfigError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
+    target = _pick(args.target, env_values, "CAMERA_HOST", "")
+    if not target:
+        parser.error("--target is required (or set CAMERA_HOST in the environment file).")
+
+    allowed_values = args.allowed_cidr
+    if allowed_values is None:
+        env_allowed = env_values.get("RELAY_ALLOWED_CIDR", "")
+        allowed_values = [env_allowed] if env_allowed else []
+    try:
+        networks = parse_networks(allowed_values)
+    except ConfigError as exc:
+        parser.error(str(exc))
+
+    resolved_bind = str(_pick(args.bind, env_values, "RELAY_HOST", "auto"))
+    listen_port = int(_pick(args.listen_port, env_values, "RELAY_PORT", 8554))
+    target_port = int(_pick(args.target_port, env_values, "CAMERA_RTSP_PORT", 554))
 
     while True:
         try:
             config = RelayConfig(
-                bind=resolve_relay_host(args.bind),
-                listen_port=args.listen_port,
-                target=args.target,
-                target_port=args.target_port,
+                bind=resolve_relay_host(resolved_bind),
+                listen_port=listen_port,
+                target=str(target),
+                target_port=target_port,
                 allowed_networks=networks,
+                max_connections=max(1, args.max_connections),
             )
             server = RelayServer(config)
             server.start()
@@ -257,7 +381,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         while not stopped.wait(1.0):
-            pass
+            if not server.alive:
+                LOGGER.error("The accept loop stopped unexpectedly; exiting.")
+                return 1
     finally:
         server.stop()
     return 0

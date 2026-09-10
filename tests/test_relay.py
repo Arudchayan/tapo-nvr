@@ -67,6 +67,34 @@ def test_relay_rejects_clients_outside_the_allow_list() -> None:
         server.stop()
 
 
+def test_accept_loop_survives_transient_errors() -> None:
+    server = RelayServer(
+        RelayConfig(
+            bind="127.0.0.1",
+            listen_port=0,
+            target="127.0.0.1",
+            target_port=1,
+        )
+    )
+    state = {"calls": 0}
+
+    class FlakyListener:
+        def accept(self) -> tuple[object, tuple[str, int]]:
+            state["calls"] += 1
+            if state["calls"] == 1:
+                raise ConnectionResetError("transient")
+            server._stopped.set()  # type: ignore[attr-defined]
+            raise OSError("stopping")
+
+        def close(self) -> None:
+            pass
+
+    server._listener = FlakyListener()  # type: ignore[assignment]
+    server._accept_loop()  # type: ignore[attr-defined]
+
+    assert state["calls"] >= 2
+
+
 def test_is_allowed_handles_ipv4_mapped_ipv6() -> None:
     networks = parse_networks(["100.64.0.0/10"])
 

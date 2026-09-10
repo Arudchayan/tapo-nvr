@@ -30,13 +30,14 @@ $config = Read-DotEnv -Path $EnvFile
 $python = Resolve-PythonPath -Config $config
 Assert-TapoNvrInstalled -PythonPath $python
 $relay = Get-RelaySettings -Config $config
+Write-Host "Using Python: $python"
 
 $logDirectory = Join-Path $env:LOCALAPPDATA 'tapo-nvr'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 $logFile = Join-Path $logDirectory 'relay.log'
 
 $arguments = '-m tapo_nvr.relay --bind {0} --listen-port {1} --target {2} --target-port {3} --allowed-cidr {4} --log-file "{5}"' -f `
-    $relay.RelayHost, $relay.RelayPort, $relay.CameraHost, $relay.CameraPort, ($relay.Allowed -join ','), $logFile
+    $relay.Bind, $relay.RelayPort, $relay.CameraHost, $relay.CameraPort, ($relay.Allowed -join ','), $logFile
 
 $startupFolder = [Environment]::GetFolderPath('Startup')
 $shortcutPath = Join-Path $startupFolder 'tapo-nvr relay.lnk'

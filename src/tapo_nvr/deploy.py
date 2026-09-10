@@ -38,17 +38,22 @@ def deploy(
     dry_run: bool = False,
 ) -> None:
     """Write the Frigate configuration and (re)create its container."""
-    settings.require_camera()
-    relay_host = resolve_relay_host(settings.relay_host)
     gpu_mode = (gpu or settings.frigate_gpu).lower()
+    if not dry_run:
+        settings.require_camera()
+        settings.require_nvr()
+    relay_host = resolve_relay_host(settings.relay_host)
 
     if dry_run:
-        preview_gpu = "vaapi" if gpu_mode == "auto" else gpu_mode
         home = "/home/<nvr-user>"
         base = resolve_remote_base(home, settings.nvr_base_path)
-        config_dir = f"{base}/config"
+        frigate_dir = f"{base}/frigate"
+        config_dir = f"{frigate_dir}/config"
         storage_dir = settings.remote_storage_dir(home, base)
-        env_path = f"{base}/frigate.env"
+        env_path = f"{frigate_dir}/frigate.env"
+        preview_gpu = "vaapi" if gpu_mode == "auto" else gpu_mode
+        note = " (auto: the real run probes /dev/dri/renderD128)" if gpu_mode == "auto" else ""
+        print(f"# GPU: {gpu_mode}{note}")
         print(f"# {config_dir}/config.yml")
         print(render_config(settings, preview_gpu), end="")
         print("\n# frigate.env (written with mode 0600)")
@@ -68,21 +73,22 @@ def deploy(
         )
         return
 
-    settings.require_nvr()
-
     with SSHClient(settings) as ssh:
-        version = ssh.run("docker --version")
-        if not version.ok:
+        daemon = ssh.run("docker info")
+        if not daemon.ok:
             raise ConfigError(
-                "Docker is not available on the NVR host. Install Docker and try again."
+                "The Docker daemon is not reachable on the NVR host. Confirm Docker "
+                "is running and that the NVR user can use it without sudo "
+                "(for example, is in the 'docker' group)."
             )
 
         home = ssh.home()
         base = resolve_remote_base(home, settings.nvr_base_path)
-        config_dir = f"{base}/config"
+        frigate_dir = f"{base}/frigate"
+        config_dir = f"{frigate_dir}/config"
         config_path = f"{config_dir}/config.yml"
         storage_dir = settings.remote_storage_dir(home, base)
-        env_path = f"{base}/frigate.env"
+        env_path = f"{frigate_dir}/frigate.env"
 
         create_directories = (
             f"mkdir -p {shlex.quote(config_dir)} {shlex.quote(storage_dir)} "
@@ -140,3 +146,4 @@ def deploy(
             raise ConfigError(f"Frigate did not stay running. Recent logs:\n{message}")
 
         print(f"Frigate is running. UI: https://{nvr_address}:{settings.frigate_ui_port}")
+        print(f"Recordings: {storage_dir}")

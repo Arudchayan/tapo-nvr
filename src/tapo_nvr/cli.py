@@ -112,7 +112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the ``tapo-nvr`` command."""
     raw = list(sys.argv[1:] if argv is None else argv)
     if raw and raw[0] == "relay":
-        return relay_main(raw[1:])
+        try:
+            return relay_main(raw[1:])
+        except ConfigError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
     parser = build_parser()
     args = parser.parse_args(raw)

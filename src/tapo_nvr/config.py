@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import codecs
 import ipaddress
+import logging
 import posixpath
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_ALLOWED_CIDR = "100.64.0.0/10"
 DEFAULT_BASE_PATH = "~/tapo-nvr"
@@ -18,6 +22,12 @@ Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 _CAMERA_NAME = re.compile(r"[A-Za-z0-9_]+")
 _CONTAINER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _SHM_SIZE = re.compile(r"[0-9]+[bkmg]?", re.IGNORECASE)
+_BOMS = (
+    codecs.BOM_UTF16_LE,
+    codecs.BOM_UTF16_BE,
+    codecs.BOM_UTF32_LE,
+    codecs.BOM_UTF32_BE,
+)
 
 
 class ConfigError(RuntimeError):
@@ -27,15 +37,17 @@ class ConfigError(RuntimeError):
 def parse_dotenv(text: str) -> dict[str, str]:
     """Parse a minimal dotenv document.
 
-    Supports comments, blank lines, unquoted values with whitespace-prefixed
-    comments, and single- or double-quoted values. Values are never
-    interpolated.
+    Supports comments, blank lines, a leading ``export``, unquoted values with
+    whitespace-prefixed comments, and single- or double-quoted values. Values
+    are never interpolated. Duplicate keys are last-wins.
     """
     values: dict[str, str] = {}
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
         if "=" not in line:
             raise ConfigError(f"Invalid configuration line {line_number}: expected KEY=VALUE")
         key, value = line.split("=", 1)
@@ -62,14 +74,20 @@ def _clean_value(value: str, line_number: int) -> str:
 
 
 def load_env_file(path: str | Path) -> dict[str, str]:
-    """Read and parse an environment file."""
+    """Read and parse a UTF-8 (optionally BOM-prefixed) environment file."""
     env_path = Path(path)
     try:
-        text = env_path.read_text(encoding="utf-8")
+        data = env_path.read_bytes()
     except FileNotFoundError as exc:
         raise ConfigError(
             f"Configuration file not found: {env_path}. Copy .env.example to .env and edit it."
         ) from exc
+    if data.startswith(_BOMS):
+        raise ConfigError(f"{env_path} is UTF-16 or UTF-32 encoded. Save it as UTF-8 and retry.")
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"{env_path} is not valid UTF-8: {exc}") from exc
     return parse_dotenv(text)
 
 
@@ -93,20 +111,35 @@ def parse_networks(values: Sequence[str]) -> tuple[Network, ...]:
 def resolve_remote_base(home: str, base_path: str) -> str:
     """Resolve ``NVR_BASE_PATH`` against the remote user's home directory."""
     value = (base_path or DEFAULT_BASE_PATH).strip()
+    home = home.rstrip("/") or "/"
     if value.startswith("~"):
+        if value not in {"~"} and not value.startswith("~/"):
+            raise ConfigError(
+                "NVR_BASE_PATH cannot use '~user' syntax; use an absolute path "
+                "or a path starting with '~/'."
+            )
         suffix = value[1:].lstrip("/")
-        return posixpath.join(home.rstrip("/"), suffix) if suffix else home.rstrip("/")
-    if not value.startswith("/"):
-        raise ConfigError("NVR_BASE_PATH must be an absolute path or start with '~'.")
-    return value.rstrip("/") or "/"
+        resolved = posixpath.join(home, suffix) if suffix else home
+    elif value.startswith("/"):
+        resolved = value.rstrip("/") or "/"
+    else:
+        raise ConfigError("NVR_BASE_PATH must be an absolute path or start with '~/'.")
+    if resolved in {"/", home}:
+        raise ConfigError(
+            "NVR_BASE_PATH must be a dedicated subdirectory, not the home "
+            "directory or the filesystem root."
+        )
+    return resolved
 
 
 @dataclass(frozen=True)
 class Settings:
     """Validated settings.
 
-    Every field maps to the same-named upper-case environment key, for example
-    ``camera_host`` is read from ``CAMERA_HOST``.
+    Almost every field maps to the same-named upper-case environment key, for
+    example ``camera_host`` is read from ``CAMERA_HOST``. The exception is
+    ``relay_allowed_cidrs``, which is read from the comma-separated
+    ``RELAY_ALLOWED_CIDR``.
     """
 
     # Camera
@@ -151,7 +184,16 @@ class Settings:
         """Build validated settings from environment-style keys."""
 
         def text(name: str, default: str = "") -> str:
-            return str(mapping.get(name, default)).strip()
+            raw = mapping.get(name)
+            if raw is None:
+                return default
+            value = str(raw).strip()
+            return value if value else default
+
+        def secret(name: str) -> str:
+            # Quoted values may intentionally contain leading/trailing spaces.
+            raw = mapping.get(name)
+            return "" if raw is None else str(raw)
 
         def integer(
             name: str,
@@ -160,7 +202,7 @@ class Settings:
             minimum: int = 1,
             maximum: int = 65535,
         ) -> int:
-            raw = text(name)
+            raw = text(name, "")
             if not raw:
                 return default
             try:
@@ -172,7 +214,7 @@ class Settings:
             return value
 
         def boolean(name: str, default: bool) -> bool:
-            raw = text(name).lower()
+            raw = text(name, "").lower()
             if not raw:
                 return default
             if raw in {"1", "true", "yes", "on"}:
@@ -180,6 +222,13 @@ class Settings:
             if raw in {"0", "false", "no", "off"}:
                 return False
             raise ConfigError(f"{name} must be a boolean, got {raw!r}")
+
+        known = {field.name.upper() for field in fields(cls)}
+        known.discard("RELAY_ALLOWED_CIDRS")
+        known.add("RELAY_ALLOWED_CIDR")
+        known.add("PYTHON_PATH")  # consumed by the Windows install scripts
+        for key in sorted(set(mapping) - known):
+            LOGGER.warning("Ignoring unknown setting %s", key)
 
         camera_name = text("FRIGATE_CAMERA_NAME", "tapo_c220")
         if not _CAMERA_NAME.fullmatch(camera_name):
@@ -218,7 +267,7 @@ class Settings:
             camera_host=text("CAMERA_HOST"),
             camera_rtsp_port=integer("CAMERA_RTSP_PORT", 554),
             camera_username=text("CAMERA_USERNAME"),
-            camera_password=text("CAMERA_PASSWORD"),
+            camera_password=secret("CAMERA_PASSWORD"),
             camera_record_stream=text("CAMERA_RECORD_STREAM", "stream1"),
             camera_detect_stream=text("CAMERA_DETECT_STREAM", "stream2"),
             camera_detect_width=integer("CAMERA_DETECT_WIDTH", 640, maximum=16384),
@@ -231,7 +280,7 @@ class Settings:
             nvr_host=text("NVR_HOST"),
             nvr_ssh_port=integer("NVR_SSH_PORT", 22),
             nvr_ssh_user=text("NVR_SSH_USER"),
-            nvr_ssh_password=text("NVR_SSH_PASSWORD"),
+            nvr_ssh_password=secret("NVR_SSH_PASSWORD"),
             nvr_ssh_key=text("NVR_SSH_KEY"),
             nvr_strict_host_key_checking=boolean("NVR_STRICT_HOST_KEY_CHECKING", True),
             nvr_base_path=text("NVR_BASE_PATH", DEFAULT_BASE_PATH),
@@ -269,4 +318,4 @@ class Settings:
         """Return the absolute remote path used for recordings."""
         if self.frigate_storage_path.strip():
             return resolve_remote_base(home, self.frigate_storage_path)
-        return f"{base}/storage"
+        return f"{base}/frigate/storage"
