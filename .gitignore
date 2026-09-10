@@ -1,0 +1,33 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs and generated media
+*.log
+*.mp4
+*.mkv
+*.ts
+storage/
+latest-clip.*
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
