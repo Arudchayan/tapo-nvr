@@ -115,6 +115,11 @@ def test_from_mapping_warns_about_unknown_keys(caplog: pytest.LogCaptureFixture)
         ("FRIGATE_SHM_SIZE", "lots"),
         ("NVR_STRICT_HOST_KEY_CHECKING", "maybe"),
         ("CAMERA_OBJECTS", ","),
+        ("RECORD_SEGMENT_SECONDS", "0"),
+        ("RECORD_KEEP_HOURS", "-1"),
+        ("RECORD_OUTPUT_KEEP_DAYS", "-1"),
+        ("RECORD_MIN_FREE_GB", "-1"),
+        ("RECORD_STALL_SECONDS", "-1"),
     ],
 )
 def test_from_mapping_rejects_invalid_values(key: str, value: str) -> None:
@@ -140,6 +145,95 @@ def test_require_nvr_needs_an_authentication_method() -> None:
 
     Settings(nvr_host="nvr", nvr_ssh_user="admin", nvr_ssh_password="secret").require_nvr()
     Settings(nvr_host="nvr", nvr_ssh_user="admin", nvr_ssh_key="~/.ssh/id").require_nvr()
+
+
+def test_require_sync_needs_camera_and_cloud_password() -> None:
+    with pytest.raises(ConfigError) as excinfo:
+        Settings().require_sync()
+
+    message = str(excinfo.value)
+    assert "CAMERA_HOST" in message
+    assert "CAMERA_CLOUD_PASSWORD" in message
+
+    Settings(camera_host="camera", camera_cloud_password="secret").require_sync()
+
+
+def test_from_mapping_reads_sync_settings() -> None:
+    settings = Settings.from_mapping(
+        {
+            "CAMERA_CLOUD_PASSWORD": " cloud ",
+            "SYNC_OUTPUT_DIR": "G:\\My Drive\\TapoNVR",
+        }
+    )
+
+    assert settings.camera_cloud_password == " cloud "
+    assert settings.sync_output_dir == "G:\\My Drive\\TapoNVR"
+
+
+def test_require_record_needs_camera_credentials() -> None:
+    with pytest.raises(ConfigError) as excinfo:
+        Settings().require_record()
+
+    message = str(excinfo.value)
+    assert "CAMERA_HOST" in message
+    assert "CAMERA_USERNAME" in message
+    assert "CAMERA_PASSWORD" in message
+
+    Settings(
+        camera_host="camera",
+        camera_username="user",
+        camera_password="secret",
+    ).require_record()
+
+
+def test_from_mapping_reads_record_settings() -> None:
+    settings = Settings.from_mapping(
+        {
+            "RECORD_STAGING_DIR": "E:\\tapo-staging",
+            "RECORD_OUTPUT_DIR": "G:\\My Drive\\TapoNVR",
+            "RECORD_SEGMENT_SECONDS": "900",
+            "RECORD_KEEP_HOURS": "12",
+            "RECORD_OUTPUT_KEEP_DAYS": "7",
+            "RECORD_MIN_FREE_GB": "25",
+            "RECORD_STALL_SECONDS": "120",
+            "RECORD_LOG_FILE": "E:\\logs\\record.log",
+            "RECORD_STATUS_FILE": "E:\\logs\\status.json",
+        }
+    )
+
+    assert settings.record_staging_dir == "E:\\tapo-staging"
+    assert settings.record_output_dir == "G:\\My Drive\\TapoNVR"
+    assert settings.record_segment_seconds == 900
+    assert settings.record_keep_hours == 12
+    assert settings.record_output_keep_days == 7
+    assert settings.record_min_free_gb == 25
+    assert settings.record_stall_seconds == 120
+    assert settings.record_log_path(Path("stg")) == Path("E:\\logs\\record.log")
+    assert settings.record_status_path(Path("stg")) == Path("E:\\logs\\status.json")
+
+
+def test_record_paths_and_defaults(tmp_path: Path) -> None:
+    settings = Settings(
+        sync_output_dir="G:\\Drive",
+        record_staging_dir=str(tmp_path / "staging"),
+        record_output_dir=str(tmp_path / "out"),
+        record_segment_seconds=900,
+        record_keep_hours=12,
+    )
+
+    assert settings.record_staging_path() == tmp_path / "staging"
+    assert settings.record_output_path() == tmp_path / "out"
+    assert settings.record_segment_seconds == 900
+    assert settings.record_keep_hours == 12
+    assert settings.record_min_free_gb == 10
+    assert settings.record_stall_seconds == 300
+    assert settings.record_log_path(tmp_path) == tmp_path / "record.log"
+    assert settings.record_status_path(tmp_path) == tmp_path / "status.json"
+
+    assert Settings(record_output_dir="E:\\publish").record_output_path() == Path("E:\\publish")
+    assert Settings(sync_output_dir="G:\\Drive").record_output_path() == Path("recordings/record")
+    assert Settings().record_output_path() == Path("recordings/record")
+    assert Settings().record_staging_path() == Path.home() / ".tapo-nvr" / "recording"
 
 
 def test_resolve_remote_base() -> None:

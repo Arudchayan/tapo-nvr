@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-23
+
+### Added
+
+- `tapo-nvr sync` copies new recordings from the camera's microSD card to a
+  local folder, such as a Google Drive folder, for installations without an
+  always-on NVR host. It supports date ranges, dry runs, overwrite, and
+  skip-existing behavior, and leaves clips that are still recording for the next
+  run. Requires the optional `pytapo` dependency and FFmpeg.
+- `tapo-nvr record` records the camera's RTSP stream on the laptop in
+  clock-aligned segments, publishes finished segments to a folder (for example
+  a Google Drive mount), and cleans up local copies after a grace period. It
+  includes a preflight check, automatic ffmpeg restarts, ffmpeg segment-list
+  close detection, process-tree shutdown, a stall watchdog, a single-instance
+  lock, a rotating log, a JSON status heartbeat, a staging free-space guard, and
+  optional `RECORD_OUTPUT_KEEP_DAYS` retention for the published files.
+- `deploy/windows/start-record.ps1`, a small logon supervisor that restarts the
+  recorder after a failure.
+- Both deployment shapes are documented side by side: the original relay +
+  Frigate NVR and the no-always-on-host laptop/Drive modes.
+
 ## [1.0.0] - 2026-09-10
 
 First open-source release.

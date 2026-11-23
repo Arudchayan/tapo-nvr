@@ -116,3 +116,126 @@ directory exists on the NVR host; `tapo-nvr deploy` creates it.
 `RETENTION_DAYS` and `MOTION_RETENTION_DAYS` control Frigate's own retention.
 Continuous recording is disabled by default. `tapo-nvr inspect` includes a
 `storage` check with free space.
+
+## `The sync command needs the optional 'pytapo' dependency`
+
+Install the sync extra into the same environment as the CLI:
+
+```bash
+pip install 'tapo-nvr[sync]'
+# or, from a checkout:
+pip install '.[sync]'
+```
+
+## `The sync command requires Python 3.11 or newer`
+
+The `pytapo` dependency uses `asyncio.timeout`, which arrived in Python 3.11.
+Run `sync` from a newer interpreter (a separate virtual environment is fine);
+the relay, deploy, inspect, and fetch-clip commands still work on Python 3.10.
+
+## `Missing required executable(s): ffmpeg, ffprobe`
+
+Install FFmpeg and make sure both executables are on `PATH`, then reopen the
+terminal. On Windows, `winget install Gyan.FFmpeg` is usually enough. `sync`
+uses FFmpeg to remux the camera's MPEG-TS stream into MP4.
+
+## `Invalid authentication data` or error `-40211` during sync
+
+`sync` needs the **Tapo cloud account password** in
+`CAMERA_CLOUD_PASSWORD`, not the Camera Account password used for RTSP. The
+camera account is still needed for Frigate; the two credentials are separate.
+
+If the password is correct and the error persists, update the camera firmware
+and upgrade `pytapo`. SD-card downloads rely on TP-Link's private local API,
+which changes between firmware releases.
+
+## `Video playback is not supported by this camera`
+
+The camera did not expose its playback API. Check that:
+
+- A microSD card is inserted, formatted, and visible in the Tapo app.
+- **Storage & Recording → Local Recording** is enabled.
+- The camera is on the same LAN as the laptop.
+- You are using a supported model and a current firmware version.
+
+## `record --check` returns `401 Unauthorized`
+
+RTSP rejected `CAMERA_USERNAME` / `CAMERA_PASSWORD`. These are normally the
+Camera Account from the Tapo app, not the TP-Link cloud account. Some firmware
+also accepts the cloud account; if the Camera Account is not set up, create it
+under **Advanced Settings → Camera Account** in the Tapo app.
+
+## `record` stops when the laptop sleeps or the lid closes
+
+This is expected: the laptop is the recorder and the camera has no buffer in
+this mode. Plug the laptop in, set sleep to **Never**, set the lid-close action
+to **Do nothing**, and start `tapo-nvr record` at logon.
+
+## `Output sentinel ... is missing`
+
+The recorder requires `RECORD_OUTPUT_DIR\.tapo-nvr-output` to prove the output
+folder is the real mounted destination. If Google Drive is not mounted, the
+recorder will not create the folder or publish into a local shadow. Mount Drive,
+then create the sentinel once:
+
+```powershell
+New-Item -ItemType File "G:\My Drive\TapoNVR\record\.tapo-nvr-output" -Force
+```
+
+Segments stay in staging until the sentinel and output path are back.
+
+## `could not publish ...` in the record log
+
+The publish directory is unreachable or read-only (for example Google Drive is
+not mounted, or the Drive client is offline). The segment stays in
+`RECORD_STAGING_DIR` and is retried every 30 seconds; nothing is deleted until a
+published copy with the same size exists. Remount Drive or fix the path and the
+recorder catches up.
+
+## The record staging disk fills up
+
+A 2K stream is roughly 28–40 GB/day. Lower `RECORD_KEEP_HOURS`, point
+`RECORD_STAGING_DIR` at a larger local disk, or set
+`CAMERA_RECORD_STREAM=stream2` to record the smaller substream. If the *Drive*
+side is filling up, set `RECORD_OUTPUT_KEEP_DAYS` (for example `7`); the default
+`0` keeps published files forever.
+
+## `ffmpeg exited` repeatedly in the record log
+
+- Confirm `record --check` succeeds.
+- Close the Tapo app's live view and any other RTSP client; the camera allows a
+  small number of simultaneous streams.
+- Check that the camera is still on the same Wi-Fi/LAN and has a stable
+  connection.
+
+## `STORAGE_NOT_EXIST` or error `-71114`
+
+The camera has no usable SD card mounted. In the Tapo app, open **Device
+Settings → Storage & Recording** and check the card status. A healthy card
+shows capacity and an online/normal status. If it shows offline, reseat the
+card, format it in the app, or replace it. `sync` cannot download anything until
+the card is mounted; detection/continuous recording can be enabled but has
+nowhere to write.
+
+## `No recordings` for a date that has footage
+
+- The Tapo app's timeline and `sync` use the camera's local date. Check the
+  date range with `--date YYYY-MM-DD` or widen it with `--since`.
+- Detection recording only stores clips around events. If the schedule was
+  off, there is nothing to download.
+- Continuous recording produces many short segments; a busy day can take a
+  while to copy.
+
+## `Recording in progress` / `Camera busy`
+
+The newest clip is still being written, so `sync` leaves it for the next run.
+`Camera busy` usually means the Tapo app (or another client) is holding a
+stream slot. Close live view and retry. The camera supports a small number of
+simultaneous streams.
+
+## Files are in the Google Drive folder but not uploaded yet
+
+`sync` only writes files; Google Drive for Desktop performs the upload. Keep
+Drive running and wait for it to finish before shutting the laptop. Check the
+Drive tray icon for pending uploads, and make sure the destination is inside
+the Drive mount rather than a local folder that looks similar.
