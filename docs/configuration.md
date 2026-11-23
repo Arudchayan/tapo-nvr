@@ -35,6 +35,40 @@ passwords.
 | `CAMERA_DETECT_FPS` | `5` | Detection frames per second. |
 | `CAMERA_OBJECTS` | `person,cat,dog` | Comma-separated object labels Frigate tracks. |
 
+## SD-card backup
+
+`tapo-nvr sync` reads the camera's microSD recordings through the local Tapo
+API. These keys are only used by that command; the relay and Frigate commands
+ignore them.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `CAMERA_CLOUD_PASSWORD` | *(empty)* | TP-Link account password used to authenticate SD-card playback. This is the Tapo cloud account password, not the Camera Account password. Required by `sync`. |
+| `SYNC_OUTPUT_DIR` | `recordings` | Folder where downloaded clips are written. Point it at a Google Drive (or other cloud-synced) folder. `--output` overrides it. |
+
+`CAMERA_USERNAME` and `CAMERA_PASSWORD` are not used by `sync`; it connects as
+`admin` with the cloud password, which is what the Tapo local API expects for
+SD-card downloads.
+
+## Laptop recording
+
+`tapo-nvr record` records the camera's RTSP stream on the machine running the
+command. It uses `CAMERA_HOST`, `CAMERA_USERNAME`, `CAMERA_PASSWORD`,
+`CAMERA_RTSP_PORT`, and `CAMERA_RECORD_STREAM` from the camera section. These
+keys control the recorder itself.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `RECORD_STAGING_DIR` | `~/.tapo-nvr/recording` | Local directory for the active and recently published segments. Keep it on a local disk, not the Drive mount. |
+| `RECORD_OUTPUT_DIR` | `recordings/record` | Publish directory. Point it at a Google Drive (or other cloud-synced) folder. It is deliberately separate from `SYNC_OUTPUT_DIR`. |
+| `RECORD_SEGMENT_SECONDS` | `1800` | Segment length in seconds; 1800 is 30 minutes. |
+| `RECORD_KEEP_HOURS` | `24` | How long a published segment is kept locally before cleanup. |
+| `RECORD_OUTPUT_KEEP_DAYS` | `0` | Delete published files older than this many days from `RECORD_OUTPUT_DIR`. `0` keeps everything; `7` keeps roughly a week of 2K continuous video. |
+| `RECORD_MIN_FREE_GB` | `10` | Stop recording when the staging disk has less free space. Files already in staging are kept. |
+| `RECORD_STALL_SECONDS` | `300` | Restart ffmpeg after this many seconds without a growing segment. `0` disables the stall watchdog. |
+| `RECORD_LOG_FILE` | `<staging>/record.log` | Rotating log file (5 MB × 3). |
+| `RECORD_STATUS_FILE` | `<staging>/status.json` | JSON heartbeat written every publishing cycle. |
+
 ## Relay
 
 `tapo-nvr relay` reads these keys from `.env` by default; command-line flags

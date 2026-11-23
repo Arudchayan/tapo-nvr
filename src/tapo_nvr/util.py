@@ -6,8 +6,8 @@ import re
 
 _URL_CREDENTIALS = re.compile(r"(?i)\b((?:rtsps?|https?)://)[^\s]*@")
 _ENV_SECRETS = re.compile(
-    r"(?i)\b(FRIGATE_CAMERA_PASSWORD|FRIGATE_TAPO_PASSWORD|CAMERA_PASSWORD"
-    r"|NVR_SSH_PASSWORD|PASSWORD)(\s*[=:]\s*)(\S+)"
+    r"(?i)\b(FRIGATE_CAMERA_PASSWORD|FRIGATE_TAPO_PASSWORD|CAMERA_CLOUD_PASSWORD"
+    r"|CAMERA_PASSWORD|NVR_SSH_PASSWORD|PASSWORD_CLOUD|PASSWORD)(\s*[=:]\s*)(\S+)"
 )
 
 

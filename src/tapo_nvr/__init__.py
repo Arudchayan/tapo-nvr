@@ -1,4 +1,4 @@
-"""Private, camera-only RTSP relay for a self-hosted Frigate NVR."""
+"""Private RTSP relay and recording tools for Tapo cameras."""
 
 from importlib.metadata import PackageNotFoundError, version
 

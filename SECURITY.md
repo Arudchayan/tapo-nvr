@@ -28,6 +28,16 @@ fix and release before public disclosure.
 - **Camera credentials** are stored in `.env` on the relay host (Git-ignored)
   and written to a mode `0600` environment file on the NVR host over SSH. They
   are never embedded in the Frigate YAML.
+- **SD-card backup credentials.** `tapo-nvr sync` stores the Tapo cloud account
+  password in `.env` and uses it locally to authenticate playback through
+  `pytapo`. The password is sent to the camera on the LAN, not to Google Drive;
+  only the resulting video files are written to the output folder. Keep `.env`
+  at mode `0600` and do not point `SYNC_OUTPUT_DIR` at an untrusted share.
+- **Laptop recording.** `tapo-nvr record` uses `CAMERA_USERNAME` and
+  `CAMERA_PASSWORD` for RTSP, stored in `.env`. Segments sit in
+  `RECORD_STAGING_DIR` until a published copy exists and the grace period has
+  expired. If `RECORD_OUTPUT_DIR` is a Google Drive mount, the Drive client is
+  responsible for uploading those files; treat both directories as sensitive.
 - **SSH host keys are verified** by default. `NVR_STRICT_HOST_KEY_CHECKING=false`
   disables verification and should only be used for initial setup or disposable
   hosts.

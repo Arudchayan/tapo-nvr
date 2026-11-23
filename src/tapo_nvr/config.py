@@ -147,6 +147,7 @@ class Settings:
     camera_rtsp_port: int = 554
     camera_username: str = ""
     camera_password: str = ""
+    camera_cloud_password: str = ""
     camera_record_stream: str = "stream1"
     camera_detect_stream: str = "stream2"
     camera_detect_width: int = 640
@@ -167,6 +168,20 @@ class Settings:
     nvr_ssh_key: str = ""
     nvr_strict_host_key_checking: bool = True
     nvr_base_path: str = DEFAULT_BASE_PATH
+
+    # SD-card backup
+    sync_output_dir: str = ""
+
+    # Laptop recording
+    record_staging_dir: str = ""
+    record_output_dir: str = ""
+    record_segment_seconds: int = 1800
+    record_keep_hours: int = 24
+    record_output_keep_days: int = 0
+    record_min_free_gb: int = 10
+    record_stall_seconds: int = 300
+    record_log_file: str = ""
+    record_status_file: str = ""
 
     # Frigate
     frigate_camera_name: str = "tapo_c220"
@@ -268,6 +283,7 @@ class Settings:
             camera_rtsp_port=integer("CAMERA_RTSP_PORT", 554),
             camera_username=text("CAMERA_USERNAME"),
             camera_password=secret("CAMERA_PASSWORD"),
+            camera_cloud_password=secret("CAMERA_CLOUD_PASSWORD"),
             camera_record_stream=text("CAMERA_RECORD_STREAM", "stream1"),
             camera_detect_stream=text("CAMERA_DETECT_STREAM", "stream2"),
             camera_detect_width=integer("CAMERA_DETECT_WIDTH", 640, maximum=16384),
@@ -284,6 +300,18 @@ class Settings:
             nvr_ssh_key=text("NVR_SSH_KEY"),
             nvr_strict_host_key_checking=boolean("NVR_STRICT_HOST_KEY_CHECKING", True),
             nvr_base_path=text("NVR_BASE_PATH", DEFAULT_BASE_PATH),
+            sync_output_dir=text("SYNC_OUTPUT_DIR"),
+            record_staging_dir=text("RECORD_STAGING_DIR"),
+            record_output_dir=text("RECORD_OUTPUT_DIR"),
+            record_segment_seconds=integer(
+                "RECORD_SEGMENT_SECONDS", 1800, minimum=60, maximum=21600
+            ),
+            record_keep_hours=integer("RECORD_KEEP_HOURS", 24, minimum=0, maximum=8760),
+            record_output_keep_days=integer("RECORD_OUTPUT_KEEP_DAYS", 0, minimum=0, maximum=3650),
+            record_min_free_gb=integer("RECORD_MIN_FREE_GB", 10, minimum=0, maximum=100000),
+            record_stall_seconds=integer("RECORD_STALL_SECONDS", 300, minimum=0, maximum=3600),
+            record_log_file=text("RECORD_LOG_FILE"),
+            record_status_file=text("RECORD_STATUS_FILE"),
             frigate_camera_name=camera_name,
             frigate_container_name=container_name,
             frigate_image=text("FRIGATE_IMAGE", DEFAULT_FRIGATE_IMAGE),
@@ -313,6 +341,36 @@ class Settings:
             raise ConfigError(
                 "Set NVR_SSH_KEY or NVR_SSH_PASSWORD to authenticate to the NVR host."
             )
+
+    def require_sync(self) -> None:
+        """Validate the SD-card backup settings."""
+        self.require("camera_host", "camera_cloud_password")
+
+    def require_record(self) -> None:
+        """Validate the laptop-recording settings."""
+        self.require("camera_host", "camera_username", "camera_password")
+
+    def record_staging_path(self) -> Path:
+        """Return the local staging directory for continuous recording."""
+        value = self.record_staging_dir.strip() or "~/.tapo-nvr/recording"
+        return Path(value).expanduser()
+
+    def record_output_path(self) -> Path:
+        """Return the publish directory for continuous recording."""
+        value = (self.record_output_dir or "recordings/record").strip()
+        return Path(value).expanduser()
+
+    def record_log_path(self, staging: Path) -> Path:
+        """Return the recorder log path, defaulting next to the staging directory."""
+        if self.record_log_file.strip():
+            return Path(self.record_log_file).expanduser()
+        return staging / "record.log"
+
+    def record_status_path(self, staging: Path) -> Path:
+        """Return the recorder status path, defaulting next to the staging directory."""
+        if self.record_status_file.strip():
+            return Path(self.record_status_file).expanduser()
+        return staging / "status.json"
 
     def remote_storage_dir(self, home: str, base: str) -> str:
         """Return the absolute remote path used for recordings."""
