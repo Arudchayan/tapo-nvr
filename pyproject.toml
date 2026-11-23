@@ -35,7 +35,7 @@ classifiers = [
   "Topic :: Multimedia :: Video",
   "Topic :: System :: Networking",
 ]
-dependencies = ["paramiko>=3.4,<4"]
+dependencies = ["paramiko>=3.4,<6"]
 
 [project.optional-dependencies]
 sync = ["pytapo>=3.4.20,<4; python_version >= '3.11'"]
