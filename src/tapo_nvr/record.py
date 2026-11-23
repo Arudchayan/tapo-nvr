@@ -558,13 +558,14 @@ def _stop_process(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=15,
-        )
+        with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=15,
+            )
         with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=FFMPEG_STOP_TIMEOUT_SECONDS)
         if proc.poll() is None:

@@ -36,6 +36,17 @@ if (-not (Test-Path -LiteralPath $envFile)) {
     exit 1
 }
 
+# The status file lives under RECORD_STAGING_DIR; honor an override in .env.
+$stagingLine = Get-Content -LiteralPath $envFile |
+    Where-Object { $_ -match '^\s*RECORD_STAGING_DIR\s*=' } |
+    Select-Object -Last 1
+if ($stagingLine) {
+    $stagingValue = ($stagingLine -split '=', 2)[1].Trim().Trim('"').Trim("'")
+    if ($stagingValue) {
+        $Staging = $stagingValue
+    }
+}
+
 while ($true) {
     & $python -m tapo_nvr record --env $envFile
     $code = $LASTEXITCODE
